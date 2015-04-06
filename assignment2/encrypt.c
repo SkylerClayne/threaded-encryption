@@ -45,6 +45,7 @@ pthread_mutex_t mutex, empty, filled, encode;
 void *in_f(void *arg){
     
     int index, count = 0;
+    int i = 0;
     check = 0;
     char character;
     nanosleep(&t, NULL);
@@ -52,17 +53,10 @@ void *in_f(void *arg){
     
     pthread_mutex_lock(&empty);
     while (!feof(file_in)) {
-        int i = -1;
         
-        while(hasEmptyBuffer()==0){
-            nanosleep(&t, NULL);
-        }
-        
-     //   i = getFirstEmptyBuffer();
-
-      //  if(i != -1){
-        pthread_mutex_lock(&mutex);
-        printf(" Begin input thread\n");
+        if (i < bufSize) {
+            pthread_mutex_lock(&mutex);
+            printf(" Begin input thread\n");
             off_t off = ftell(file_in);
             character = fgetc(file_in);
             
@@ -80,19 +74,24 @@ void *in_f(void *arg){
             }
         pthread_mutex_unlock(&mutex);
         nanosleep(&t, NULL);
-      //  }
+            i++;
+        } else {
+            pthread_mutex_unlock(&encode);
+            
+            pthread_mutex_lock(&mutex);
+            activeIn--;
+            pthread_mutex_unlock(&mutex);
+        }
 
 
     }
     
-    pthread_mutex_unlock(&encode);
     nanosleep(&t, NULL);
-    activeIn--;
+    
     pthread_exit(0);
 }
 
 void *work_f(void *arg){
-    char character;
     int index;
     nanosleep(&t, NULL);
 
@@ -100,27 +99,30 @@ void *work_f(void *arg){
     printf("  Being encrypting thread\n");
     printf("  with encrypting key: %d\n", atoi(arg));
     
+    if (activeIn > 0) {
     for (index = 0; index < bufSize; index++) {
+        if (buffer[index].state == 'w') {
+            
+            nanosleep(&t, NULL);
+            pthread_mutex_lock(&mutex);
+            char character = buffer[index].data;
+            
+            // encrpyt
+            if(atoi(arg) >= 0 && character>31 && character<127)character = (((int)character-32)+2*95+atoi(arg))%95+32;
+            // decrypt
+            else if (atoi(arg) < 0 &&character>31 && character<127 )character = (((int)character-32)+2*95-atoi(arg))%95+32;
+            
+            buffer[index].data = character;
+            buffer[index].state = 'o';
+            pthread_mutex_unlock(&mutex);
+            nanosleep(&t, NULL);
+        }
 
+        }
+    } else {
+        pthread_mutex_unlock(&filled);
         nanosleep(&t, NULL);
-        pthread_mutex_lock(&mutex);
-        character = buffer[index].data;
-        
-        // encrpyt
-        if(atoi(arg) >= 0 && character>31 && character<127)character = (((int)character-32)+2*95+atoi(arg))%95+32;
-        // decrypt
-        else if (atoi(arg) < 0 &&character>31 && character<127 )character = (((int)character-32)+2*95-atoi(arg))%95+32;
-        
-        buffer[index].data = character;
-        buffer[index].state = 'o';
-        pthread_mutex_unlock(&mutex);
-        nanosleep(&t, NULL);
-
     }
-    
-    pthread_mutex_unlock(&filled);
-    nanosleep(&t, NULL);
-
     
     pthread_exit(0);
 }
@@ -133,24 +135,23 @@ void *out_f(void *arg){
         printf("   Begin output thread.\n");
     
         for (index = 0; index < bufSize; index++) {
-            
-            nanosleep(&t, NULL);
-            pthread_mutex_lock(&mutex);
-
-        
-            if(buffer[index].data == '\0') printf("%d ", (unsigned int) buffer[index].offset);
-        
-            if (fseek(file_out, buffer[index].offset, SEEK_SET) == -1) error("error setting output file position to %u\n",(unsigned int) buffer[index].offset);
-            if (fputc(buffer[index].data, file_out) == EOF) error("error writing byte %d to output file\n", buffer[index].data);
-        
-            buffer[index].data = '\0';
-            buffer[index].state = 'e';
-            buffer[index].offset = 0;
-            check--;
-            pthread_mutex_unlock(&mutex);
-            nanosleep(&t, NULL);
-
-
+            if (buffer[index].state == 'o') {
+                nanosleep(&t, NULL);
+                pthread_mutex_lock(&mutex);
+                
+                
+                if(buffer[index].data == '\0') printf("%d ", (unsigned int) buffer[index].offset);
+                
+                if (fseek(file_out, buffer[index].offset, SEEK_SET) == -1) error("error setting output file position to %u\n",(unsigned int) buffer[index].offset);
+                if (fputc(buffer[index].data, file_out) == EOF) error("error writing byte %d to output file\n", buffer[index].data);
+                
+                buffer[index].data = '\0';
+                buffer[index].state = 'e';
+                buffer[index].offset = 0;
+                check--;
+                pthread_mutex_unlock(&mutex);
+                nanosleep(&t, NULL);
+            }
         }
     
         pthread_mutex_unlock(&empty);

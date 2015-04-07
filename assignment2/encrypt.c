@@ -35,11 +35,10 @@ BufferItem *buffer;
 struct timespec t;
 FILE *file_in, *file_out;
 unsigned int seed = 0;
-volatile int bufSize;
-volatile int check;
-volatile int activeIn = 0;
-volatile int activeWork = 0;
-volatile int activeOut = 0;
+int bufSize;
+int activeIn = 0;
+int activeWork = 0;
+int activeOut = 0;
 
 /* PROTOFUNCTIONS */
 void *in_f(void *arg);
@@ -56,9 +55,9 @@ pthread_mutex_t mutex, empty, filled, encode;
 
 void *in_f(void *arg){
     
+    nanosleep(&t, NULL);
     int index;
     char character;
-    nanosleep(&t, NULL);
     
     pthread_mutex_lock(&mutex);
     activeIn++;
@@ -69,7 +68,9 @@ void *in_f(void *arg){
     do {
         pthread_mutex_lock(&empty);
         pthread_mutex_lock(&mutex);
+        
         index = getFirstEmptyBuffer();
+        
         if (index != -1) {
 
             off_t off = ftell(file_in);
@@ -106,22 +107,21 @@ void *in_f(void *arg){
 }
 
 void *work_f(void *arg){
-    int check;
+    int check, key;
     char character;
-    nanosleep(&t, NULL);
+  //  nanosleep(&t, NULL);
     
     pthread_mutex_lock(&mutex);
     activeWork++;
     check = getFirstWorkBuffer();
-
+    key = atoi(arg);
     pthread_mutex_unlock(&mutex);
     assert("ACTIVE WORK THREAD VARIABLE INCREMENTED");
-    
+    printf("%d", key);
     
     do {
         pthread_mutex_lock(&encode);
         pthread_mutex_lock(&mutex);
-
         
         if (check > -1) {
             assert("FOUND A CHARACTER READY FOR ENCRYPTION");
@@ -130,16 +130,17 @@ void *work_f(void *arg){
             
            if (character == EOF) {
                assert("SOMEHOW THE CHARACTER AT THAT INDEX IS EOF");
+               
                break;
             } else if (character == '\0'){
                 assert("SOMEHOW THE CHARACTER AT THAT INDEX WAS NULL");
             } else {
                 assert("CHARACTER VALID AND READY TO ENCRYPT/DECRYPT");
                 // encrpyt
-                if(atoi(arg) >= 0 && character>31 && character<127)character = (((int)character-32)+2*95+atoi(arg))%95+32;
+                if(atoi(arg) >= 0 && character>31 && character<127) character = (((int)character-32)+2*95+key)%95+32;
                 
                 // decrypt
-                else if (atoi(arg) < 0 &&character>31 && character<127 )character = (((int)character-32)+2*95-atoi(arg))%95+32;
+                else if (atoi(arg) < 0 &&character>31 && character<127 ) character = (((int)character-32)+2*95-(-1*key))%95+32;
                 
                 buffer[check].data = character;
                 buffer[check].state = 'o';
@@ -148,10 +149,15 @@ void *work_f(void *arg){
             nanosleep(&t, NULL);
         }
         
-        check = getFirstWorkBuffer();
         
         pthread_mutex_unlock(&mutex);
         pthread_mutex_unlock(&filled);
+        check = getFirstWorkBuffer();
+
+        
+        if (activeIn == 0) {
+            pthread_mutex_unlock(&encode);
+        }
 
     } while (activeIn > 0 || check > -1);
 
@@ -159,7 +165,6 @@ void *work_f(void *arg){
     pthread_mutex_lock(&mutex);
     activeWork--;
     pthread_mutex_unlock(&mutex);
-    pthread_mutex_unlock(&encode);
 
 
     nanosleep(&t, NULL);
@@ -169,7 +174,7 @@ void *work_f(void *arg){
 
 void *out_f(void *arg){
     int check;
-    nanosleep(&t, NULL);
+   // nanosleep(&t, NULL);
     check = getFirstOutBuffer();
 
     do {
@@ -210,10 +215,14 @@ void *out_f(void *arg){
 
         pthread_mutex_unlock(&mutex);
         pthread_mutex_unlock(&empty);
+        
+        if (activeWork == 0) {
+            pthread_mutex_unlock(&filled);
+        }
 
     } while (activeWork > 0 || check > -1);
 
-    pthread_mutex_unlock(&filled);
+  //  pthread_mutex_unlock(&filled);
 
 
     nanosleep(&t, NULL);
@@ -225,7 +234,8 @@ int main(int argc, const char * argv[]) {
     
     /* VARIABLES */
     int key, nIN, nWORK, nOUT, index;
-    
+    assert("BEGIN SETUP OF VARIABLES");
+
     
     
     /* ASSERT: BEGIN DEFENSIVE INPUT HANDLING */
@@ -257,9 +267,8 @@ int main(int argc, const char * argv[]) {
     pthread_mutex_init(&empty, NULL);
     pthread_mutex_init(&filled, NULL);
     pthread_mutex_init(&encode, NULL);
-    
-    
-    /* ASSERT: BEGIN SETUP ON THREADS */
+
+    assert("BEGIN SETUP ON THREADS");
     for (index = 0; index < nIN; index++) {
        // activeIn++;
         pthread_create(&in[index], NULL, in_f, &argv[5]);
@@ -268,14 +277,14 @@ int main(int argc, const char * argv[]) {
 
     for (index = 0; index < nWORK; index++) {
         pthread_create(&work[index], NULL, work_f, argv[1]);
-        nanosleep(&t, NULL);
+       nanosleep(&t, NULL);
     }
 
     
 
     for (index = 0; index < nOUT; index++) {
         pthread_create(&out[index], NULL, out_f, &argv[6]);
-        nanosleep(&t, NULL);
+       nanosleep(&t, NULL);
     }
     /* ASSERT: END SETUP ON THREADS */
     

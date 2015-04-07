@@ -61,7 +61,7 @@
       </BuildableProductRunnable>
       <CommandLineArguments>
          <CommandLineArgument
-            argument = "1 1 1 1 from.txt to.txt 100"
+            argument = "1 2 2 1 from.txt to.txt 2"
             isEnabled = "YES">
          </CommandLineArgument>
       </CommandLineArguments>

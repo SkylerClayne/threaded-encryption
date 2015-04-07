@@ -41,6 +41,15 @@ volatile int activeIn = 0;
 volatile int activeWork = 0;
 volatile int activeOut = 0;
 
+/* PROTOFUNCTIONS */
+void *in_f(void *arg);
+void *work_f(void *arg);
+void *out_f(void *arg);
+int hasEmptyBuffer();
+int getFirstEmptyBuffer();
+int getFirstWorkBuffer();
+int getFirstOutBuffer();
+
 
 /* MUTEX */
 pthread_mutex_t mutex, empty, filled, encode;
@@ -103,7 +112,6 @@ void *work_f(void *arg){
     
     pthread_mutex_lock(&mutex);
     activeWork++;
-    printf("active in: %d\n",activeWork);
     check = getFirstWorkBuffer();
 
     pthread_mutex_unlock(&mutex);
@@ -141,6 +149,7 @@ void *work_f(void *arg){
         }
         
         check = getFirstWorkBuffer();
+        
         pthread_mutex_unlock(&mutex);
         pthread_mutex_unlock(&filled);
 
@@ -149,10 +158,7 @@ void *work_f(void *arg){
     
     pthread_mutex_lock(&mutex);
     activeWork--;
-    printf("active work: %d\n",activeWork);
     pthread_mutex_unlock(&mutex);
-    
-   // pthread_mutex_unlock(&filled);
     pthread_mutex_unlock(&encode);
 
 
@@ -206,12 +212,7 @@ void *out_f(void *arg){
         pthread_mutex_unlock(&empty);
 
     } while (activeWork > 0 || check > -1);
-    
-    printf("the end has been reached?\n");
 
-    
-  //  pthread_mutex_unlock(&mutex);
-    pthread_mutex_unlock(&empty);
     pthread_mutex_unlock(&filled);
 
 
@@ -238,8 +239,6 @@ int main(int argc, const char * argv[]) {
     if((bufSize = atoi(argv[7])) < 1) error("The size of the buffer should be atlest 1");
     /* ASSERT: END DEFENSIVE INPUT HANDLING */
     
-    
-    printf("bufsize: %d\n", bufSize);
     /* INITIALIZE BUFFER */
     buffer = (BufferItem *) malloc(sizeof (BufferItem) * bufSize);
     for (index = 0; index < bufSize; index++) {

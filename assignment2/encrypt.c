@@ -15,6 +15,7 @@
 // ONLY USED ON MAC
 
 #include <time.h>
+#include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <pthread.h>
@@ -37,6 +38,8 @@ unsigned int seed = 0;
 volatile int bufSize;
 volatile int check;
 volatile int activeIn = 0;
+volatile int activeWork = 0;
+volatile int activeOut = 0;
 
 
 /* MUTEX */
@@ -44,118 +47,175 @@ pthread_mutex_t mutex, empty, filled, encode;
 
 void *in_f(void *arg){
     
-    int index, count = 0;
-    int i = 0;
-    check = 0;
+    int index;
     char character;
     nanosleep(&t, NULL);
-    activeIn++;
     
-    pthread_mutex_lock(&empty);
-    while (!feof(file_in)) {
-        
-        if (i < bufSize) {
-            pthread_mutex_lock(&mutex);
-            printf(" Begin input thread\n");
+    pthread_mutex_lock(&mutex);
+    activeIn++;
+    pthread_mutex_unlock(&mutex);
+    assert("ACTIVE IN THREAD VARIABLE INCREMENTED");
+
+
+    do {
+        pthread_mutex_lock(&empty);
+        pthread_mutex_lock(&mutex);
+        index = getFirstEmptyBuffer();
+        if (index != -1) {
+
             off_t off = ftell(file_in);
             character = fgetc(file_in);
             
             if (character == EOF) {
                 break;
             } else if (character == '\0'){
-                // escape with error
+                printf("Error While Reading from File at offset = %lld Re Run the program ", off);
+                error("Read Error Re Run the program at offset = %lld", off);
             } else {
                 // all is good
-                buffer[check].offset = off;
-                buffer[check].data = character;
-                buffer[check].state = 'w';
-                printf("%c", buffer[check].data);
-                check++;
+                buffer[index].offset = off;
+                buffer[index].data = character;
+                buffer[index].state = 'w';
             }
-        pthread_mutex_unlock(&mutex);
-        nanosleep(&t, NULL);
-            i++;
-        } else {
-            pthread_mutex_unlock(&encode);
-            
-            pthread_mutex_lock(&mutex);
-            activeIn--;
-            pthread_mutex_unlock(&mutex);
         }
+        pthread_mutex_unlock(&mutex);
+        pthread_mutex_unlock(&encode);
 
-
-    }
+    }while (!feof(file_in));
     
+    pthread_mutex_unlock(&mutex);
+    pthread_mutex_unlock(&encode);
+    
+    pthread_mutex_lock(&mutex);
+    activeIn--;
+    pthread_mutex_unlock(&mutex);
+    assert("RELEASE ACTIVE IN THREAD VARIABLE");
+
     nanosleep(&t, NULL);
     
     pthread_exit(0);
 }
 
 void *work_f(void *arg){
-    int index;
+    int check;
+    char character;
     nanosleep(&t, NULL);
-
-    pthread_mutex_lock(&encode);
-    printf("  Being encrypting thread\n");
-    printf("  with encrypting key: %d\n", atoi(arg));
     
-    if (activeIn > 0) {
-    for (index = 0; index < bufSize; index++) {
-        if (buffer[index].state == 'w') {
-            
-            nanosleep(&t, NULL);
-            pthread_mutex_lock(&mutex);
-            char character = buffer[index].data;
-            
-            // encrpyt
-            if(atoi(arg) >= 0 && character>31 && character<127)character = (((int)character-32)+2*95+atoi(arg))%95+32;
-            // decrypt
-            else if (atoi(arg) < 0 &&character>31 && character<127 )character = (((int)character-32)+2*95-atoi(arg))%95+32;
-            
-            buffer[index].data = character;
-            buffer[index].state = 'o';
-            pthread_mutex_unlock(&mutex);
-            nanosleep(&t, NULL);
-        }
+    pthread_mutex_lock(&mutex);
+    activeWork++;
+    printf("active in: %d\n",activeWork);
+    check = getFirstWorkBuffer();
 
+    pthread_mutex_unlock(&mutex);
+    assert("ACTIVE WORK THREAD VARIABLE INCREMENTED");
+    
+    
+    do {
+        pthread_mutex_lock(&encode);
+        pthread_mutex_lock(&mutex);
+
+        
+        if (check > -1) {
+            assert("FOUND A CHARACTER READY FOR ENCRYPTION");
+
+            character = buffer[check].data;
+            
+           if (character == EOF) {
+               assert("SOMEHOW THE CHARACTER AT THAT INDEX IS EOF");
+               break;
+            } else if (character == '\0'){
+                assert("SOMEHOW THE CHARACTER AT THAT INDEX WAS NULL");
+            } else {
+                assert("CHARACTER VALID AND READY TO ENCRYPT/DECRYPT");
+                // encrpyt
+                if(atoi(arg) >= 0 && character>31 && character<127)character = (((int)character-32)+2*95+atoi(arg))%95+32;
+                
+                // decrypt
+                else if (atoi(arg) < 0 &&character>31 && character<127 )character = (((int)character-32)+2*95-atoi(arg))%95+32;
+                
+                buffer[check].data = character;
+                buffer[check].state = 'o';
+
+            }
+            nanosleep(&t, NULL);
         }
-    } else {
+        
+        check = getFirstWorkBuffer();
+        pthread_mutex_unlock(&mutex);
         pthread_mutex_unlock(&filled);
-        nanosleep(&t, NULL);
-    }
+
+    } while (activeIn > 0 || check > -1);
+
+    
+    pthread_mutex_lock(&mutex);
+    activeWork--;
+    printf("active work: %d\n",activeWork);
+    pthread_mutex_unlock(&mutex);
+    
+   // pthread_mutex_unlock(&filled);
+    pthread_mutex_unlock(&encode);
+
+
+    nanosleep(&t, NULL);
     
     pthread_exit(0);
 }
 
 void *out_f(void *arg){
-    int index;
+    int check;
     nanosleep(&t, NULL);
+    check = getFirstOutBuffer();
 
+    do {
         pthread_mutex_lock(&filled);
-        printf("   Begin output thread.\n");
-    
-        for (index = 0; index < bufSize; index++) {
-            if (buffer[index].state == 'o') {
-                nanosleep(&t, NULL);
-                pthread_mutex_lock(&mutex);
+        pthread_mutex_lock(&mutex);
+        
+        if (check > -1) {
+            char character = buffer[check].data;
+            
+            if (character == EOF) {
+                break;
+            } else if (character == '\0'){
+                break;
+            } else {
+                // all is good
                 
+                if(buffer[check].data == '\0')
+                    printf("%lld ", buffer[check].offset);
                 
-                if(buffer[index].data == '\0') printf("%d ", (unsigned int) buffer[index].offset);
+                if (fseek(file_out, buffer[check].offset, SEEK_SET) == -1) {
+                    fprintf(stderr, "error setting output file position to %u\n",(unsigned int) buffer[check].offset);
+                    exit(-1);
+                }
+                if (fputc(buffer[check].data, file_out) == EOF) {
+                    fprintf(stderr, "error writing byte %d to output file\n", buffer[check].data);
+                    exit(-1);
+                }
                 
-                if (fseek(file_out, buffer[index].offset, SEEK_SET) == -1) error("error setting output file position to %u\n",(unsigned int) buffer[index].offset);
-                if (fputc(buffer[index].data, file_out) == EOF) error("error writing byte %d to output file\n", buffer[index].data);
-                
-                buffer[index].data = '\0';
-                buffer[index].state = 'e';
-                buffer[index].offset = 0;
-                check--;
-                pthread_mutex_unlock(&mutex);
-                nanosleep(&t, NULL);
+                buffer[check].data = '\0';
+                buffer[check].state = 'e';
+                buffer[check].offset = 0;
+                check++;
             }
+            nanosleep(&t, NULL);
         }
-    
+        
+        check = getFirstOutBuffer();
+
+        pthread_mutex_unlock(&mutex);
         pthread_mutex_unlock(&empty);
-        nanosleep(&t, NULL);
+
+    } while (activeWork > 0 || check > -1);
+    
+    printf("the end has been reached?\n");
+
+    
+  //  pthread_mutex_unlock(&mutex);
+    pthread_mutex_unlock(&empty);
+    pthread_mutex_unlock(&filled);
+
+
+    nanosleep(&t, NULL);
 
     pthread_exit(0);
 }
@@ -202,22 +262,24 @@ int main(int argc, const char * argv[]) {
     
     /* ASSERT: BEGIN SETUP ON THREADS */
     for (index = 0; index < nIN; index++) {
+       // activeIn++;
         pthread_create(&in[index], NULL, in_f, &argv[5]);
+        nanosleep(&t, NULL);
     }
-
-    nanosleep(&t, NULL);
 
     for (index = 0; index < nWORK; index++) {
         pthread_create(&work[index], NULL, work_f, argv[1]);
+        nanosleep(&t, NULL);
     }
 
-    nanosleep(&t, NULL);
+    
 
     for (index = 0; index < nOUT; index++) {
         pthread_create(&out[index], NULL, out_f, &argv[6]);
+        nanosleep(&t, NULL);
     }
     /* ASSERT: END SETUP ON THREADS */
-    nanosleep(&t, NULL);
+    
 
     
     
@@ -225,16 +287,19 @@ int main(int argc, const char * argv[]) {
     for (index = 0; index < nIN; index++) {
         pthread_join(in[index], NULL);
     }
-    
+    assert("all IN threads joined\n");
+
     for (index = 0; index < nWORK; index++) {
         pthread_join(work[index], NULL);
     }
-    
+    assert("all WORK threads joined\n");
+
     for (index = 0; index < nOUT; index++) {
         pthread_join(out[index], NULL);
     }
     /* ASSERT: END JOINING THREADS */
-    
+    assert("all OUT threads joined\n");
+
     
     
     /* ASSERT: CLOSE FILES */
@@ -268,12 +333,12 @@ int hasEmptyBuffer(){
 /* Returns -1 if Buffer is not empty or else Avaiable buffer index */
 int getFirstEmptyBuffer(){
     int ret = -1;
-    if(hasEmptyBuffer()==1)
+    if(hasEmptyBuffer())
     {
         int i = 0;
         while(i < bufSize){
             if(buffer[i].state == 'e')
-            {   ret = i;
+            {
                 return i;
             }
             i++;
